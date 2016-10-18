@@ -1,2 +1,2 @@
 # arduino-labs
-skettches for lab works
+sketches for lab works
