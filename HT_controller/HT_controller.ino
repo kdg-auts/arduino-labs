@@ -48,7 +48,7 @@ encoder with button and displayed on LCD screen (8x2).
 */
 
 #include <LiquidCrystal.h>
-#include <GyverEncoder.h>
+#include <Encoder.h>
 #include <Wire.h>
 #include "SparkFunHTU21D.h"
 #include "DHT.h"
@@ -102,7 +102,8 @@ const int set_temp = 3;
 // auxiliary components
 char FLAG[4] = {' ', ' ', ' ', ' '};
 char HTU_status, DHT_status = 0x20;
-float testSetPoint = 0.0;
+float humdSetPoint = 40.0;
+float tempSetPoint = 37.0;
 int DHTS_H_i, HTUS_H_i;
 
 
@@ -136,6 +137,27 @@ void setup() {
   delay(800);
 }
 
+void show_sensor_value_LCD(const char *sensor_name, int hum_data, float temp_data, char *flag_set) {
+  LCD.clear();
+  LCD.home();
+  LCD.print(sensor_name);
+  if (hum_data < 10) {
+    LCD.setCursor(7, 0);
+  } else {
+    if (hum_data < 100) {
+      LCD.setCursor(6, 0);
+    } else {
+      LCD.setCursor(5, 0);
+    }
+  }
+  LCD.print(hum_data);
+  LCD.setCursor(0, 1);
+  LCD.print(flag_set);
+  LCD.setCursor(4, 1);
+  LCD.print(temp_data, 1);
+  updateLCD = false;
+}
+
 void loop() {
   
   ENC.tick(); // опрос состояния энкодера. Он должен постоянно опрашиваться в цикле
@@ -143,10 +165,12 @@ void loop() {
   // опрос датчиков температуры и влажности
   if (millis() % 1000 == 0) { // read sensors one time in a second
     // update sensor readings
-    HTUS_H = HTUS.readHumidity();
     HTUS_T = HTUS.readTemperature();
-    DHTS_H = DHTS.readHumidity();
+    HTUS_H = HTUS.readHumidity();
+    HTUS_H_i = int(HTUS_H);
     DHTS_T = DHTS.readTemperature();
+    DHTS_H = DHTS.readHumidity();
+    DHTS_H_i = int(DHTS_H);
     updateLCD = true; // trigger LCD update to refresh displayed values
     
     // DEBUG output to Serial
@@ -172,7 +196,70 @@ void loop() {
     }
     #endif
   }
-  
+
+  // main state machine
+  switch (state) {
+      case show_dht:  // default state 1 - show DHT data on screen (and relay status)
+        if (ENC.isRight()) {  // turn encoder to switch between two default states
+          state = show_htu;
+          updateLCD = true;
+        }
+        if (ENC.isLeft()) {  // turn encoder to switch between two default states
+          state = show_htu;
+          updateLCD = true;
+        }
+        if (ENC.isClick()) {  // press button to switch to humidity preset setup
+          state = set_humd;
+          updateLCD = true;
+        }
+      break;
+      case show_htu:  // default state 2 show HTU data on screen (and relay status)
+        if (ENC.isRight()) {  // turn encoder to switch between two default states
+          state = show_dht;
+          updateLCD = true;
+        }
+        if (ENC.isLeft()) {  // turn encoder to switch between two default states
+          state = show_dht;
+          updateLCD = true;
+        }
+        if (ENC.isClick()) {  // press button to switch to humidity preset setup
+          state = set_humd;
+          updateLCD = true;
+        }
+      break;
+      case set_humd:  // set humidity preset
+        if (ENC.isRight()) {
+          // increment humidity preset between 40.0 and 90.0 (with step 0.5)
+          updateLCD = true;
+        }
+        if (ENC.isLeft()) {
+          // decrement humidity preset between 40.0 and 90.0 (with step 0.5)
+          updateLCD = true;
+        }
+        if (ENC.isClick()) {  // switch to temperature preset setup
+          state = set_temp;
+          updateLCD = true;
+        }
+      break;
+      case set_temp:  // set temperature preset
+        if (ENC.isRight()) {
+          // increment temperature preset between 30.0 and 50.0 (with step 0.1)
+          updateLCD = true;
+        }
+        if (ENC.isLeft()) {
+          // decrement temperature preset between 30.0 and 50.0 (with step 0.1)
+          updateLCD = true;
+        }
+        if (ENC.isClick()) {
+          state = set_temp;
+          updateLCD = true;
+        }
+      break;
+      default:
+        state = show_htu;
+        updateLCD = true;
+      break;
+
   if (ENC.isRight()) {
     switch (state) {
       case show_dht:
@@ -273,7 +360,8 @@ void loop() {
   if (updateLCD) {
     switch (state) {
       case show_dht:
-        LCD.clear();
+        show_sensor_value_LCD("DHT:", DHTS_H_i, DHTS_T, FLAG)
+        /*LCD.clear();
         LCD.home();
         LCD.print(F("DHT:"));
         DHTS_H_i = int(DHTS_H);
@@ -292,10 +380,11 @@ void loop() {
         LCD.setCursor(4, 1);
         LCD.print(DHTS_T, 1);
         //LCD.leftToRight();
-        updateLCD = false;
+        updateLCD = false;*/
       break;
       case show_htu:
-        LCD.clear();
+        show_sensor_value_LCD("HTU:", HTUS_H_i, HTUS_T, FLAG)
+        /*LCD.clear();
         LCD.home();
         LCD.print(F("HTU:"));
         HTUS_H_i = int(HTUS_H);
@@ -314,12 +403,9 @@ void loop() {
         LCD.setCursor(4, 1);
         LCD.print(HTUS_T, 1);
         //LCD.leftToRight();
-        updateLCD = false;
+        updateLCD = false;*/
       break;
     }
-    /*LCD.clear();
-    LCD.setCursor(0, 1);
-    LCD.print(testSetPoint, 1);
-    updateLCD = false;*/
   }
 }
+

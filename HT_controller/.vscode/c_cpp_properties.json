@@ -16,7 +16,8 @@
                 "C:/Program Files (x86)/Arduino/hardware/arduino/avr/libraries/Wire/src",
                 "C:/Program Files (x86)/Arduino/hardware/tools/avr/**",
                 "C:/Program Files (x86)/Arduino/libraries/**",
-                "C:/Users/Gizmo/Documents/Arduino/libraries/**"
+                "C:/Users/Gizmo/Documents/Arduino/libraries/**",
+                "C:/Users/Gizmo/Documents/Arduino/libraries/Encoder/src"
             ],
             "forcedInclude": [],
             "cStandard": "c17",
@@ -29,7 +30,7 @@
         },
         {
             "name": "Arduino",
-            "compilerPath": "C:\\Program Files (x86)\\Arduino\\hardware\\tools\\avr\\bin\\avr-g++",
+            "compilerPath": "C://Program Files (x86)//Arduino//hardware//tools//avr//bin//avr-g++",
             "compilerArgs": [
                 "-std=gnu++11",
                 "-fpermissive",
@@ -41,20 +42,20 @@
             ],
             "intelliSenseMode": "gcc-x64",
             "includePath": [
-                "C:\\Program Files (x86)\\Arduino\\hardware\\arduino\\avr\\cores\\arduino",
-                "C:\\Program Files (x86)\\Arduino\\hardware\\arduino\\avr\\variants\\eightanaloginputs",
-                "C:\\Program Files (x86)\\Arduino\\libraries\\LiquidCrystal\\src",
-                "C:\\Users\\Gizmo\\Documents\\Arduino\\libraries\\GyverEncoder\\src",
-                "C:\\Program Files (x86)\\Arduino\\hardware\\arduino\\avr\\libraries\\Wire\\src",
-                "C:\\Users\\Gizmo\\Documents\\Arduino\\libraries\\SparkFun_HTU21D_Humidity_and_Temperature_Sensor_Breakout\\src",
-                "C:\\Users\\Gizmo\\Documents\\Arduino\\libraries\\DHT_sensor_library",
-                "C:\\Users\\Gizmo\\Documents\\Arduino\\libraries\\Adafruit_Unified_Sensor",
-                "c:\\program files (x86)\\arduino\\hardware\\tools\\avr\\lib\\gcc\\avr\\7.3.0\\include",
-                "c:\\program files (x86)\\arduino\\hardware\\tools\\avr\\lib\\gcc\\avr\\7.3.0\\include-fixed",
-                "c:\\program files (x86)\\arduino\\hardware\\tools\\avr\\avr\\include"
+                "C://Program Files (x86)//Arduino//hardware//arduino//avr//cores//arduino",
+                "C://Program Files (x86)//Arduino//hardware//arduino//avr//variants//eightanaloginputs",
+                "C://Program Files (x86)//Arduino//libraries//LiquidCrystal//src",
+                "C://Users//Gizmo//Documents//Arduino//libraries//Encoder//src",
+                "C://Program Files (x86)//Arduino//hardware//arduino//avr//libraries//Wire//src",
+                "C://Users//Gizmo//Documents//Arduino//libraries//SparkFun_HTU21D_Humidity_and_Temperature_Sensor_Breakout//src",
+                "C://Users//Gizmo//Documents//Arduino//libraries//DHT_sensor_library",
+                "C://Users//Gizmo//Documents//Arduino//libraries//Adafruit_Unified_Sensor",
+                "c://program files (x86)//arduino//hardware//tools//avr//lib//gcc//avr//7.3.0//include",
+                "c://program files (x86)//arduino//hardware//tools//avr//lib//gcc//avr//7.3.0//include-fixed",
+                "c://program files (x86)//arduino//hardware//tools//avr//avr//include"
             ],
             "forcedInclude": [
-                "C:\\Program Files (x86)\\Arduino\\hardware\\arduino\\avr\\cores\\arduino\\Arduino.h"
+                "C://Program Files (x86)//Arduino//hardware//arduino//avr//cores//arduino//Arduino.h"
             ],
             "cStandard": "c11",
             "cppStandard": "c++11",
