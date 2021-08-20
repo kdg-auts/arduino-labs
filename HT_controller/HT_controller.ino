@@ -47,6 +47,7 @@ encoder with button and displayed on LCD screen (8x2).
 
 */
 
+#include <EEPROM.h>
 #include <LiquidCrystal.h>
 #include <Encoder.h>
 #include <Wire.h>
@@ -68,6 +69,8 @@ encoder with button and displayed on LCD screen (8x2).
 LiquidCrystal LCD(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 bool updateLCD = false;
 int contrast = 0;
+const char C_ARROW_DOWN = 0xda;
+const char C_SPACE = 0x20;
 
 // Encoder init
 #define ENC_CK 14
@@ -92,8 +95,11 @@ const int show_dht = 0;
 const int show_htu = 1;
 const int set_humd = 2;
 const int set_temp = 3;
+const int attach_sensor = 4;
+const int attach_relay = 5;
 
-// relay pins
+
+// relay pins (default: 0-Heater HT, 1-Heater Fan HF, 2-Moisture Fan MF, 3-Roller RL
 #define REL_0 6
 #define REL_1 7
 #define REL_2 8
@@ -101,10 +107,28 @@ const int set_temp = 3;
 
 // auxiliary components
 char FLAG[4] = {' ', ' ', ' ', ' '};
-char HTU_status, DHT_status = 0x20;
-float humdSetPoint = 40.0;
-float tempSetPoint = 37.0;
+char HTU_status, DHT_status = 0x20; // used for sensors initial detection/check
+float humdSetPoint = 50.0;  // humidity preset buffer
+float tempSetPoint = 37.0;  // temperature preset buffer
+const float C_H_LOW_LIM = 40.0;
+const float C_H_HIGH_LIM = 90.0;
+const float C_T_LOW_LIM = 20.0;
+const float C_T_HIGH_LIM = 50.0;
 int DHTS_H_i, HTUS_H_i;
+const float delta_temp = 0.4;
+const float delta_humd = 4.0;
+
+struct setpointEEVault_struct {
+  byte resetFlag;      // flag to control setpoint values actuality (0xA5 - values are actual, other values - setpoints are corrupted)
+  float humdSetPoint;  // humidity preset between 40.0 and 90.0 (with step 0.5)
+  float tempSetPoint;  // temperature preset between 30.0 and 50.0 (with step 0.1)
+  byte mainSensor;     // sensor which values are used to control relays
+  byte relayAsset[4];  // pin numbers for relays: 0-HT, 1-HF, 2-MF, 3-RL
+};
+
+setpointEEVault_struct setpointEEVault;
+setpointEEVault_struct SV_TEST;
+#define SPAdress 0
 
 
 void setup() {
@@ -120,7 +144,7 @@ void setup() {
   
   LCD.begin(8, 2); // set up the LCD's number of columns and rows
   LCD.setCursor(1, 0); // set the cursor to column 1, line 0
-  //pinMode(LCD_CT, OUTPUT);
+  pinMode(LCD_CT, OUTPUT);
   analogWrite(LCD_CT, contrast); // set max contrast
   HTUS.begin(); // turn on and init HTU21D sensor
   DHTS.begin(); // turn on and init AM2302 sensor
@@ -134,6 +158,43 @@ void setup() {
   LCD.setCursor(0, 1);
   LCD.print("HTU"); LCD.print(HTU_status);
   LCD.print("DHT"); LCD.print(DHT_status);
+
+  EEPROM.get(SPAdress, setpointEEVault);
+  // DEBUG
+  Serial.print(F("setting from EEPROM: "));
+  Serial.print(setpointEEVault.humdSetPoint, 1);
+  Serial.print(F(" - "));
+  Serial.print(setpointEEVault.tempSetPoint, 1);
+  Serial.print(F(" - "));
+  Serial.println(setpointEEVault.mainSensor);
+  // DEBUG
+
+  if (setpointEEVault.resetFlag != 0xA5) { // EEPROM is clear - write default values
+    Serial.println(F("EEPROM is clear!"));
+    setpointEEVault.resetFlag = 0xA5;
+    setpointEEVault.humdSetPoint = humdSetPoint;
+    setpointEEVault.tempSetPoint = tempSetPoint;
+    setpointEEVault.mainSensor = 0;
+    EEPROM.put(SPAdress, setpointEEVault);
+  } else { // setpoints are out of limits (EEPROM was corrupted)
+    if ((setpointEEVault.humdSetPoint > 90.0 || setpointEEVault.humdSetPoint < 40.0) || (setpointEEVault.tempSetPoint > 50.0 || setpointEEVault.tempSetPoint < 30.0)) {
+      Serial.println(F("EEPROM is corupted!"));
+      setpointEEVault.resetFlag = 0xA5;
+      setpointEEVault.humdSetPoint = humdSetPoint;
+      setpointEEVault.tempSetPoint = tempSetPoint;
+      setpointEEVault.mainSensor = 0;
+      EEPROM.put(SPAdress, setpointEEVault);
+    }
+  }
+
+  // show values from main sensor by default
+  if (setpointEEVault.mainSensor == 0) {
+    state = show_dht;
+  } else {
+    state = show_htu;
+  }
+
+  // delay to show sensor check status on LCD
   delay(800);
 }
 
@@ -155,6 +216,15 @@ void show_sensor_value_LCD(const char *sensor_name, int hum_data, float temp_dat
   LCD.print(flag_set);
   LCD.setCursor(4, 1);
   LCD.print(temp_data, 1);
+  updateLCD = false;
+}
+
+void edit_setpoint_LCD(const char *setpoint_name, float setpoint_value) {
+  LCD.clear();
+  LCD.home();
+  LCD.print(setpoint_name);
+  LCD.setCursor(4, 1);
+  LCD.print(setpoint_value, 1);
   updateLCD = false;
 }
 
@@ -186,8 +256,6 @@ void loop() {
     if (isnan(DHTS_H) || isnan(DHTS_T)) {
       Serial.println(F("Failed to read from DHT sensor! Check wiring!"));
     } else {
-      //Serial.print(F("DHT: "));
-      //Serial.print(millis()/1000);
       Serial.print(F(" TempD:"));
       Serial.print(DHTS_T, 1);
       Serial.print(F(" HumdD:"));
@@ -197,213 +265,258 @@ void loop() {
     #endif
   }
 
-  // main state machine
-  switch (state) {
-      case show_dht:  // default state 1 - show DHT data on screen (and relay status)
-        if (ENC.isRight()) {  // turn encoder to switch between two default states
-          state = show_htu;
-          updateLCD = true;
-        }
-        if (ENC.isLeft()) {  // turn encoder to switch between two default states
-          state = show_htu;
-          updateLCD = true;
-        }
-        if (ENC.isClick()) {  // press button to switch to humidity preset setup
-          state = set_humd;
-          updateLCD = true;
-        }
-      break;
-      case show_htu:  // default state 2 show HTU data on screen (and relay status)
-        if (ENC.isRight()) {  // turn encoder to switch between two default states
-          state = show_dht;
-          updateLCD = true;
-        }
-        if (ENC.isLeft()) {  // turn encoder to switch between two default states
-          state = show_dht;
-          updateLCD = true;
-        }
-        if (ENC.isClick()) {  // press button to switch to humidity preset setup
-          state = set_humd;
-          updateLCD = true;
-        }
-      break;
-      case set_humd:  // set humidity preset
-        if (ENC.isRight()) {
-          // increment humidity preset between 40.0 and 90.0 (with step 0.5)
-          updateLCD = true;
-        }
-        if (ENC.isLeft()) {
-          // decrement humidity preset between 40.0 and 90.0 (with step 0.5)
-          updateLCD = true;
-        }
-        if (ENC.isClick()) {  // switch to temperature preset setup
-          state = set_temp;
-          updateLCD = true;
-        }
-      break;
-      case set_temp:  // set temperature preset
-        if (ENC.isRight()) {
-          // increment temperature preset between 30.0 and 50.0 (with step 0.1)
-          updateLCD = true;
-        }
-        if (ENC.isLeft()) {
-          // decrement temperature preset between 30.0 and 50.0 (with step 0.1)
-          updateLCD = true;
-        }
-        if (ENC.isClick()) {
-          state = set_temp;
-          updateLCD = true;
-        }
-      break;
-      default:
-        state = show_htu;
-        updateLCD = true;
-      break;
-
-  if (ENC.isRight()) {
-    switch (state) {
-      case show_dht:
-        state = show_htu;
-        updateLCD = true;
-      break;
-      case show_htu:
-        state = show_dht;
-        updateLCD = true;
-      break;
-      case set_temp:
-        
-        updateLCD = true;
-      break;
-      case set_humd:
-        
-        updateLCD = true;
-      break;
-      default:
-        state = show_htu;
-        updateLCD = true;
-      break;
-    }
-    /*if (testSetPoint < 40) {
-      testSetPoint += 0.1;
-    } else {
-      testSetPoint = 40;
-    }*/
-  }
+  // control relays according to chosen main sensor values
+  // if Tsen < Tsp-dt/2 --> HT=on HF=on
+  // if Tsen > Tsp+dt/2 --> HT=off HF=on
+  // if Tsen <> {Tsp-d/2, Tsp+d/2} --> HT=off HF=off
+  // if Hsen < Hsp-dh/2 --> MF=on
+  // if Hsen > Hsp+dh/2 --> MF=off
+  // roller should be on for shift_time 4 times per day
   
-  if (ENC.isLeft()) {
-    switch (state) {
-      case show_dht:
-        state = show_htu;
-        updateLCD = true;
-      break;
-      case show_htu:
-        state = show_dht;
-        updateLCD = true;
-      break;
-      case set_temp:
-        
-        updateLCD = true;
-      break;
-      case set_humd:
-        
-        updateLCD = true;
-      break;
-      default:
-        state = show_htu;
-        updateLCD = true;
-      break;
-    }
-    /*if (testSetPoint > -40) {
-      testSetPoint -= 0.1;
-    } else {
-      testSetPoint = -40;
-    }*/
-  }
-
-  if (ENC.isClick()) {
-    //testSetPoint = 0.0;
-    if (FLAG[0] == ' ') {
-      FLAG[0] = 0xda; 
+  if (setpointEEVault.mainSensor == 0) { // active sensor - DHT
+    if (DHTS_T < (setpointEEVault.tempSetPoint - delta_temp/2)) { // temp is below limit
       digitalWrite(REL_0, HIGH);
+      FLAG[0] = C_ARROW_DOWN;
+      digitalWrite(REL_1, HIGH);
+      FLAG[1] = C_ARROW_DOWN;
     } else {
-      FLAG[0] = ' '; 
-      digitalWrite(REL_0, LOW);
+      if (DHTS_T > (setpointEEVault.tempSetPoint + delta_temp/2)) { // temp is over limit
+        digitalWrite(REL_0, LOW);
+        FLAG[0] = C_SPACE;
+        digitalWrite(REL_1, HIGH);
+        FLAG[1] = C_ARROW_DOWN;
+      } else { // temp is between limits
+        digitalWrite(REL_0, LOW);
+        FLAG[0] = C_SPACE;
+        digitalWrite(REL_1, LOW);
+        FLAG[1] = C_SPACE;
+      }
     }
-    if (FLAG[1] == ' ') FLAG[1] = 0xda; else FLAG[1] = ' ';
-    if (FLAG[2] == ' ') FLAG[2] = 0xda; else FLAG[2] = ' ';
-    if (FLAG[3] == ' ') FLAG[3] = 0xda; else FLAG[3] = ' '; 
-    /*switch (state) {
-      case show_dht:
-        state = set_temp;
-        updateLCD = true;
-      break;
-      case show_htu:
-        state = set_temp;
-        updateLCD = true;
-      break;
-      case set_temp:
-        state = set_temp;
-        updateLCD = true;
-      break;
-      case set_humd:
-        
-        updateLCD = true;
-      break;
-      default:
+    if (DHTS_H < (setpointEEVault.humdSetPoint - delta_humd/2)) { // humidity is below limit
+      digitalWrite(REL_2, HIGH);
+      FLAG[2] = C_ARROW_DOWN;
+    } else {
+      if (DHTS_H > (setpointEEVault.humdSetPoint + delta_humd/2)) { // humidity is over limit
+        digitalWrite(REL_2, LOW);
+        FLAG[2] = C_SPACE;
+      }
+    }
+  } else { // // active sensor - HTU
+    if (HTUS_T < (setpointEEVault.tempSetPoint - delta_temp/2)) { // temp is below limit
+      digitalWrite(REL_0, HIGH);
+      FLAG[0] = C_ARROW_DOWN;
+      digitalWrite(REL_1, HIGH);
+      FLAG[1] = C_ARROW_DOWN;
+    } else {
+      if (HTUS_T > (setpointEEVault.tempSetPoint + delta_temp/2)) { // temp is over limit
+        digitalWrite(REL_0, LOW);
+        FLAG[0] = C_SPACE;
+        digitalWrite(REL_1, HIGH);
+        FLAG[1] = C_ARROW_DOWN;
+      } else { // temp is between limits
+        digitalWrite(REL_0, LOW);
+        FLAG[0] = C_SPACE;
+        digitalWrite(REL_1, LOW);
+        FLAG[1] = C_SPACE;
+      }
+    }
+    if (HTUS_H < (setpointEEVault.humdSetPoint - delta_humd/2)) { // humidity is below limit
+      digitalWrite(REL_2, HIGH);
+      FLAG[2] = C_ARROW_DOWN;
+    } else {
+      if (HTUS_H > (setpointEEVault.humdSetPoint + delta_humd/2)) { // humidity is over limit
+        digitalWrite(REL_2, LOW);
+        FLAG[2] = C_SPACE;
+      }
+    }
+  }
+
+  // main state machine - state transitions
+  switch (state) {
+    case show_dht:  // default state 1 - show DHT data on screen (and relay status)
+      if (ENC.isRight()) {  // turn encoder to switch between two default states
         state = show_htu;
         updateLCD = true;
-      break;
-    }*/
-    updateLCD = true;
+      }
+      if (ENC.isLeft()) {  // turn encoder to switch between two default states
+        state = show_htu;
+        updateLCD = true;
+      }
+      if (ENC.isClick()) {  // press button to switch to humidity preset setup
+        state = set_humd;
+        updateLCD = true;
+      }
+      if (ENC.isHolded()) { // press and hold to switch to sensor setup mode
+        state = attach_sensor;
+        updateLCD = true;
+      }
+    break;
+    case show_htu:  // default state 2 show HTU data on screen (and relay status)
+      if (ENC.isRight()) {  // turn encoder to switch between two default states
+        state = show_dht;
+        updateLCD = true;
+      }
+      if (ENC.isLeft()) {  // turn encoder to switch between two default states
+        state = show_dht;
+        updateLCD = true;
+      }
+      if (ENC.isClick()) {  // press button to switch to humidity preset setup
+        humdSetPoint = setpointEEVault.humdSetPoint; // update setpoint buffers before setup
+        tempSetPoint = setpointEEVault.tempSetPoint; // update setpoint buffers before setup
+        state = set_humd;
+        updateLCD = true;
+      }
+      if (ENC.isHolded()) { // press and hold to switch to sensor setup mode
+        state = attach_sensor;
+        updateLCD = true;
+      }
+    break;
+    case set_humd:  // set humidity preset
+      if (ENC.isRight()) {
+        // increment humidity preset between 40.0 and 90.0 (with step 0.5)
+        if (humdSetPoint < C_H_HIGH_LIM) {
+          humdSetPoint += 0.5;
+        } else {
+          humdSetPoint = C_H_HIGH_LIM;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isLeft()) {
+        // decrement humidity preset between 40.0 and 90.0 (with step 0.5)
+        if (humdSetPoint > C_H_LOW_LIM) {
+          humdSetPoint -= 0.5;
+        } else {
+          humdSetPoint = C_H_LOW_LIM;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isClick()) {  // switch to temperature preset setup
+        state = set_temp;
+        updateLCD = true;
+      }
+    break;
+    case set_temp:  // set temperature preset
+      if (ENC.isRight()) {
+        // increment temperature preset between 30.0 and 50.0 (with step 0.1)
+        if (tempSetPoint < C_T_HIGH_LIM) {
+          tempSetPoint += 0.1;
+        } else {
+          tempSetPoint = C_T_HIGH_LIM;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isLeft()) {
+        // decrement temperature preset between 30.0 and 50.0 (with step 0.1)
+        if (tempSetPoint > C_T_LOW_LIM) {
+          tempSetPoint -= 0.1;
+        } else {
+          tempSetPoint = C_T_LOW_LIM;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isClick()) {  // save presets to EEPROM and goto show sensor values (HTU default)
+        setpointEEVault.humdSetPoint = humdSetPoint;
+        setpointEEVault.tempSetPoint = tempSetPoint;
+        EEPROM.put(SPAdress, setpointEEVault);
+        // DEBUG
+        // EEPROM.get(SPAdress, SV_TEST);
+        // Serial.print(F("check setting from EEPROM: "));
+        // Serial.print(SV_TEST.humdSetPoint, 1);
+        // Serial.print(F(" - "));
+        // Serial.print(SV_TEST.tempSetPoint, 1);
+        // Serial.print(F(" - "));
+        // Serial.println(SV_TEST.mainSensor);
+        // DEBUG
+        if (setpointEEVault.mainSensor == 0) { // goto state to show default sensor values
+          state = show_dht;
+        } else {
+          state = show_htu;
+        }
+        updateLCD = true;
+      }
+    break;
+    case attach_sensor:  // set active sensor
+      if (ENC.isRight()) {
+        if (setpointEEVault.mainSensor == 0) {
+          setpointEEVault.mainSensor = 1;
+        } else {
+          setpointEEVault.mainSensor = 0;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isLeft()) {
+        if (setpointEEVault.mainSensor == 0) {
+          setpointEEVault.mainSensor = 1;
+        } else {
+          setpointEEVault.mainSensor = 0;
+        }
+        updateLCD = true;
+      }
+      if (ENC.isClick()) { // save chosen sensor to EEPROM and exit to default state
+        EEPROM.put(SPAdress, setpointEEVault);
+        // DEBUG
+        // EEPROM.get(SPAdress, SV_TEST);
+        // Serial.print(F("check setting from EEPROM: "));
+        // Serial.print(SV_TEST.humdSetPoint, 1);
+        // Serial.print(F(" - "));
+        // Serial.print(SV_TEST.tempSetPoint, 1);
+        // Serial.print(F(" - "));
+        // Serial.println(SV_TEST.mainSensor);
+        // DEBUG
+        if (setpointEEVault.mainSensor == 0) {
+          state = show_dht;
+        } else {
+          state = show_htu;
+        }
+        updateLCD = true;
+      }
+    break;
+    default:
+      state = show_htu;
+      updateLCD = true;
+    break;
   }
-  
+
+  // show information on LCD according to state
   if (updateLCD) {
     switch (state) {
       case show_dht:
-        show_sensor_value_LCD("DHT:", DHTS_H_i, DHTS_T, FLAG)
-        /*LCD.clear();
-        LCD.home();
-        LCD.print(F("DHT:"));
-        DHTS_H_i = int(DHTS_H);
-        if (DHTS_H_i < 10) {
-          LCD.setCursor(7, 0);
-        } else {
-          if (DHTS_H_i < 100) {
-            LCD.setCursor(6, 0);
-          } else {
-            LCD.setCursor(5, 0);
-          }
-        }
-        LCD.print(DHTS_H_i);
-        LCD.setCursor(0, 1);
-        LCD.print(FLAG);
-        LCD.setCursor(4, 1);
-        LCD.print(DHTS_T, 1);
-        //LCD.leftToRight();
-        updateLCD = false;*/
+        show_sensor_value_LCD("DHT:", DHTS_H_i, DHTS_T, FLAG);
       break;
       case show_htu:
-        show_sensor_value_LCD("HTU:", HTUS_H_i, HTUS_T, FLAG)
-        /*LCD.clear();
+        show_sensor_value_LCD("HTU:", HTUS_H_i, HTUS_T, FLAG);
+      break;
+      case set_humd:
+        //edit_setpoint_LCD("Set H:", setpointEEVault.humdSetPoint);
+        edit_setpoint_LCD("Set H:", humdSetPoint);
+        // LCD.clear();
+        // LCD.home();
+        // LCD.print(F("Set H:"));
+        // LCD.setCursor(4, 1);
+        // LCD.print(setpointEEVault.humdSetPoint, 1);
+        // updateLCD = false;
+      break;
+      case set_temp:
+        //edit_setpoint_LCD("Set T:", setpointEEVault.tempSetPoint);
+        edit_setpoint_LCD("Set T:", tempSetPoint);
+        // LCD.clear();
+        // LCD.home();
+        // LCD.print(F("Set T:"));
+        // LCD.setCursor(4, 1);
+        // LCD.print(setpointEEVault.tempSetPoint, 1);
+        // updateLCD = false;
+      break;
+      case attach_sensor:
+        LCD.clear();
         LCD.home();
-        LCD.print(F("HTU:"));
-        HTUS_H_i = int(HTUS_H);
-        if (HTUS_H_i < 10) {
-          LCD.setCursor(7, 0);
+        LCD.print(F("Sensor:"));
+        LCD.setCursor(1, 1);
+        if (setpointEEVault.mainSensor == 0) {
+          LCD.print("DHT-W");
         } else {
-          if (HTUS_H_i < 100) {
-            LCD.setCursor(6, 0);
-          } else {
-            LCD.setCursor(5, 0);
-          }
+          LCD.print("HTU-R");
         }
-        LCD.print(HTUS_H_i);
-        LCD.setCursor(0, 1);
-        LCD.print(FLAG);
-        LCD.setCursor(4, 1);
-        LCD.print(HTUS_T, 1);
-        //LCD.leftToRight();
-        updateLCD = false;*/
+        updateLCD = false;
       break;
     }
   }
